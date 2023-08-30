@@ -1,0 +1,77 @@
+```{r}
+library(tidyverse)
+library(dplyr)
+
+N <- 1000
+T <- 36
+
+treat_year125 <- 19 
+treat_year346_1 <- 10
+treat_year346_2 <- 19
+treat_year346_3 <- 28
+
+set.seed(10)
+firm_fixed <- rnorm(N, 0, 0.5^2)
+year_fixed <- rnorm(T, 0, 0.5^2)
+epsilon <- rnorm(N * T, 0, 0.5^2)
+
+
+
+list_i <- rep(1:N, T)
+list_t <- rep(1:T, each = N)
+
+
+df <- tibble(
+  i = list_i,
+  t = list_t,
+  firm_fixed = rep(firm_fixed, T),
+  year_fixed = rep(year_fixed, each = N),
+  epsilon
+) |> 
+  mutate(
+    group125 = if_else(i <= N %/% 2, 0, 1),
+    group346 = case_when(
+      i <= N %/% 3 ~ 0,
+      between(i, N %/% 3 + 1, N %/% 3 * 2) ~ 1,
+      .default = 2
+    ),
+    
+    D125 = if_else(group125 == 1 & t > treat_year125, 1, 0),
+    D346 = case_when(
+      group346 == 2 & t > treat_year346_1 ~ 1,
+      group346 == 1 & t > treat_year346_2 ~ 1,
+      group346 == 0 & t > treat_year346_3 ~ 1,
+      .default = 0
+    ),
+    # makeATT
+    tau13 = rep(rnorm(N, 2, 0.2^2), T),
+    tau2 = rep(rnorm(N, 0.3, 0.2^2), T) * (t - treat_year125),
+    
+    #makeROA
+    ROA1 = firm_fixed + year_fixed + epsilon + tau13 * D125,
+    ROA2 = firm_fixed + year_fixed + epsilon + tau2 * D125,
+    ROA3 = firm_fixed + year_fixed + epsilon + tau13 * D346
+  )
+
+fig1_1 <- df |> 
+  summarise(across(ROA1, mean), .by = c(t, group125)) |> 
+  mutate(lbl = recode_factor(group125, `1` = "treatment", `0` = "control")) |> 
+  ggplot(aes(x = t, y = ROA1, color = lbl)) + 
+  geom_line() +
+  geom_vline(xintercept = treat_year125, linetype = "dashed") +
+  labs(color = NULL)
+
+fig1_2 <- df |> 
+  summarise(across(ROA2, mean), .by = c(t, group125)) |> 
+  ggplot(aes(x = t, y = ROA2, color = factor(group125))) + 
+  geom_line() +
+  geom_vline(xintercept = treat_year125, linetype = "dashed")
+
+fig1_3 <- df |> 
+  summarise(across(ROA3, mean), .by = c(t, group346)) |> 
+  ggplot(aes(x = t, y = ROA3, color = factor(group346))) + 
+  geom_line() +
+  geom_vline(xintercept = treat_year125) 
+
+```
+
