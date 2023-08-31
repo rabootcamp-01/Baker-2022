@@ -1,77 +1,244 @@
-```{r}
+```{r setup}
 library(tidyverse)
 library(dplyr)
+library(fixest)
+library(patchwork)
+```
 
+```{r}
 N <- 1000
-T <- 36
+Y <- 36
 
-treat_year125 <- 19 
-treat_year346_1 <- 10
-treat_year346_2 <- 19
-treat_year346_3 <- 28
+treat_year12 <- 18
+treat_year3456_2 <- 9
+treat_year3456_1 <- 18
+treat_year3456_0 <- 27
+
+tau13_true <- 2
+delta2_true <- 0.3
+tau2_true <- 2.85
+tau4_0_true <- 1
+tau4_1_true <- 3
+tau4_2_true <- 5
+delta5_true <- 0.3
+delta6_0_true <- 0.1
+delta6_1_true <- 0.3
+delta6_2_true <- 0.5
+
 
 set.seed(10)
-firm_fixed <- rnorm(N, 0, 0.5^2)
-year_fixed <- rnorm(T, 0, 0.5^2)
-epsilon <- rnorm(N * T, 0, 0.5^2)
 
 
+num_sim <- 500
+att_1 <- c()
+att_2 <- c()
+att_3 <- c()
+att_4 <- c()
+att_5 <- c()
+att_6 <- c()
 
-list_i <- rep(1:N, T)
-list_t <- rep(1:T, each = N)
+for (i in 1:num_sim){
+  firm_fixed <- rnorm(N, 0, 0.5)
+  year_fixed <- rnorm(Y, 0, 0.5)
+  epsilon <- rnorm(N * Y, 0, 0.5)
+  
+  
+  
+  list_i <- rep(1:N, Y)
+  list_t <- rep(1:Y, each = N)
+  
+  
+  df <- tibble(
+    firm = list_i,
+    year = list_t,
+    firm_fixed = rep(firm_fixed, Y),
+    year_fixed = rep(year_fixed, each = N),
+    epsilon
+  ) |> 
+    mutate(
+      group12 = if_else(firm <= N %/% 2, 0, 1),
+      group3456 = case_when(
+        firm <= N %/% 3 ~ 0,
+        between(firm, N %/% 3 + 1, N %/% 3 * 2) ~ 1,
+        .default = 2
+      ),
+      
+      D12 = if_else(group12 == 1 & year > treat_year12, 1, 0),
+      D3456 = case_when(
+        group3456 == 2 & year > treat_year3456_2 ~ 1,
+        group3456 == 1 & year > treat_year3456_1 ~ 1,
+        group3456 == 0 & year > treat_year3456_0 ~ 1,
+        .default = 0
+      ),
+      #makeATT
+      tau13 = rep(rnorm(N, tau13_true, 0.2), Y),
+      tau2 = rep(rnorm(N, delta2_true, 0.2), Y) * (year - treat_year12),
+      tau4_0 = rep(rnorm(N, tau4_0_true, 0.2), Y),
+      tau4_1 = rep(rnorm(N, tau4_1_true, 0.2), Y),
+      tau4_2 = rep(rnorm(N, tau4_2_true, 0.2), Y),
+      tau5_0 = (rnorm(N * Y, 0, 0.2) * sqrt(max(year - treat_year3456_0, 0)) + 
+                  delta5_true) * (year - treat_year3456_0),
+      tau5_1 = (rnorm(N * Y, 0, 0.2) * sqrt(max(year - treat_year3456_1, 0)) + 
+                  delta5_true) * (year - treat_year3456_1),
+      tau5_2 = (rnorm(N * Y, 0, 0.2) * sqrt(max(year - treat_year3456_2, 0)) + 
+                  delta5_true) * (year - treat_year3456_2),
+      tau6_0 = (rnorm(N * Y, 0, 0.2) * sqrt(max(year - treat_year3456_0, 0)) + 
+                  delta6_0_true) * (year - treat_year3456_0),
+      tau6_1 = (rnorm(N * Y, 0, 0.2) * sqrt(max(year - treat_year3456_1, 0)) + 
+                  delta6_1_true) * (year - treat_year3456_1),
+      tau6_2 = (rnorm(N * Y, 0, 0.2) * sqrt(max(year - treat_year3456_2, 0)) + 
+                  delta6_2_true) * (year - treat_year3456_2),
+                  
+      
+      #makeROA
+      ROA1 = firm_fixed + year_fixed + epsilon + tau13 * D12,
+      ROA2 = firm_fixed + year_fixed + epsilon + tau2 * D12,
+      ROA3 = firm_fixed + year_fixed + epsilon + tau13 * D3456,
+      ROA4 = case_when(
+        group3456 == 0 ~ firm_fixed + year_fixed + epsilon + tau4_0 * D3456,
+        group3456 == 1 ~ firm_fixed + year_fixed + epsilon + tau4_1 * D3456,
+        group3456 == 2 ~ firm_fixed + year_fixed + epsilon + tau4_2 * D3456
+      ),
+      ROA5 = case_when(
+        group3456 == 0 ~ firm_fixed + year_fixed + epsilon + tau5_0 * D3456,
+        group3456 == 1 ~ firm_fixed + year_fixed + epsilon + tau5_1 * D3456,
+        group3456 == 2 ~ firm_fixed + year_fixed + epsilon + tau5_2 * D3456
+      ),
+      ROA6 = case_when(
+        group3456 == 0 ~ firm_fixed + year_fixed + epsilon + tau6_0 * D3456,
+        group3456 == 1 ~ firm_fixed + year_fixed + epsilon + tau6_1 * D3456,
+        group3456 == 2 ~ firm_fixed + year_fixed + epsilon + tau6_2 * D3456
+      )
+    )
+  
+  #estimate_ATT
+  model1 <- feols(ROA1 ~ D12 | firm + year, data = df)
+  model2 <- feols(ROA2 ~ D12 | firm + year, data = df)
+  model3 <- feols(ROA3 ~ D3456 | firm + year, data = df)
+  model4 <- feols(ROA4 ~ D3456 | firm + year, data = df)
+  model5 <- feols(ROA5 ~ D3456 | firm + year, data = df)
+  model6 <- feols(ROA6 ~ D3456 | firm + year, data = df)
+  
+  
+  
+  att_1 <- c(att_1, model1$coefficients[[1]])
+  att_2 <- c(att_2, model2$coefficients[[1]])
+  att_3 <- c(att_3, model3$coefficients[[1]])
+  att_4 <- c(att_4, model4$coefficients[[1]])
+  att_5 <- c(att_5, model5$coefficients[[1]])
+  att_6 <- c(att_6, model6$coefficients[[1]])
+}
+```
 
+```{r}
+df_sim <- tibble(att_1, att_2, att_3, att_4, att_5, att_6)
+```
 
-df <- tibble(
-  i = list_i,
-  t = list_t,
-  firm_fixed = rep(firm_fixed, T),
-  year_fixed = rep(year_fixed, each = N),
-  epsilon
-) |> 
-  mutate(
-    group125 = if_else(i <= N %/% 2, 0, 1),
-    group346 = case_when(
-      i <= N %/% 3 ~ 0,
-      between(i, N %/% 3 + 1, N %/% 3 * 2) ~ 1,
-      .default = 2
-    ),
-    
-    D125 = if_else(group125 == 1 & t > treat_year125, 1, 0),
-    D346 = case_when(
-      group346 == 2 & t > treat_year346_1 ~ 1,
-      group346 == 1 & t > treat_year346_2 ~ 1,
-      group346 == 0 & t > treat_year346_3 ~ 1,
-      .default = 0
-    ),
-    # makeATT
-    tau13 = rep(rnorm(N, 2, 0.2^2), T),
-    tau2 = rep(rnorm(N, 0.3, 0.2^2), T) * (t - treat_year125),
-    
-    #makeROA
-    ROA1 = firm_fixed + year_fixed + epsilon + tau13 * D125,
-    ROA2 = firm_fixed + year_fixed + epsilon + tau2 * D125,
-    ROA3 = firm_fixed + year_fixed + epsilon + tau13 * D346
-  )
-
-fig1_1 <- df |> 
-  summarise(across(ROA1, mean), .by = c(t, group125)) |> 
-  mutate(lbl = recode_factor(group125, `1` = "treatment", `0` = "control")) |> 
-  ggplot(aes(x = t, y = ROA1, color = lbl)) + 
+```{r}
+fig1_1a <- df |> 
+  summarise(across(ROA1, mean), .by = c(year, group12)) |> 
+  mutate(lbl = recode_factor(group12, `1` = "treatment", `0` = "control")) |> 
+  ggplot(aes(x = year, y = ROA1, color = lbl)) + 
   geom_line() +
-  geom_vline(xintercept = treat_year125, linetype = "dashed") +
-  labs(color = NULL)
+  geom_vline(xintercept = treat_year12, linetype = "dashed") +
+  labs(color = NULL) +
+  theme_minimal() +
+  theme(legend.position = c(0.1, 0.8))
 
-fig1_2 <- df |> 
-  summarise(across(ROA2, mean), .by = c(t, group125)) |> 
-  ggplot(aes(x = t, y = ROA2, color = factor(group125))) + 
+fig1_2a <- df |> 
+  summarise(across(ROA2, mean), .by = c(year, group12)) |> 
+  mutate(lbl = recode_factor(group12, `1` = "treatment", `0` = "control")) |> 
+  ggplot(aes(x = year, y = ROA2, color = lbl))+ 
   geom_line() +
-  geom_vline(xintercept = treat_year125, linetype = "dashed")
+  geom_vline(xintercept = treat_year12, linetype = "dashed") +
+  labs(color = NULL) +
+  theme_minimal() +
+  theme(legend.position = c(0.1, 0.8))
 
-fig1_3 <- df |> 
-  summarise(across(ROA3, mean), .by = c(t, group346)) |> 
-  ggplot(aes(x = t, y = ROA3, color = factor(group346))) + 
+fig1_3a <- df |> 
+  summarise(across(ROA3, mean), .by = c(year, group3456)) |> 
+  mutate(lbl = recode_factor(group3456, `2` = "1989", `1` = "1998", `0` = "2007")) |>
+  ggplot(aes(x = year, y = ROA3, color = lbl)) + 
   geom_line() +
-  geom_vline(xintercept = treat_year125) 
+  geom_vline(xintercept = c(treat_year3456_2, treat_year3456_1, treat_year3456_0), 
+             linetype = "dashed") +
+  labs(color = NULL) +
+  theme_minimal() +
+  theme(legend.position = c(0.1, 0.8))
 
+fig1_1b <- df_sim |> 
+  ggplot(aes(x = att_1)) + 
+  geom_density(fill = "blue", alpha = 0.3) +
+  geom_vline(xintercept = tau13_true, linetype = "dashed") +
+  theme_minimal() 
+
+fig1_2b <- df_sim |>
+  ggplot(aes(x = att_2)) +
+  geom_density(fill = "blue", alpha = 0.3) +
+  geom_vline(xintercept = tau2_true, linetype = "dashed") +
+  theme_minimal() 
+
+fig1_3b <- df_sim |>
+  ggplot(aes(x = att_3)) +
+  geom_density(fill = "blue", alpha = 0.3) +
+  geom_vline(xintercept = tau13_true, linetype = "dashed") +
+  theme_minimal() 
+
+fig1 <- (fig1_1a + fig1_2a + fig1_3a)/(fig1_1b + fig1_2b + fig1_3b)
+```
+
+```{r}
+fig2_4a <- df |> 
+  summarise(across(ROA4, mean), .by = c(year, group3456)) |> 
+  mutate(lbl = recode_factor(group3456, `2` = "1989", `1` = "1998", `0` = "2007")) |>
+  ggplot(aes(x = year, y = ROA4, color = lbl)) + 
+  geom_line() +
+  geom_vline(xintercept = c(treat_year3456_2, treat_year3456_1, treat_year3456_0), 
+             linetype = "dashed") +
+  labs(color = NULL) +
+  theme_minimal() +
+  theme(legend.position = c(0.1, 0.8))
+
+fig2_5a <- df |> 
+  summarise(across(ROA5, mean), .by = c(year, group3456)) |> 
+  mutate(lbl = recode_factor(group3456, `2` = "1989", `1` = "1998", `0` = "2007")) |>
+  ggplot(aes(x = year, y = ROA5, color = lbl)) + 
+  geom_line() +
+  geom_vline(xintercept = c(treat_year3456_2, treat_year3456_1, treat_year3456_0), 
+             linetype = "dashed") +
+  labs(color = NULL) +
+  theme_minimal() +
+  theme(legend.position = c(0.1, 0.8))
+
+fig2_6a <- df |> 
+  summarise(across(ROA6, mean), .by = c(year, group3456)) |> 
+  mutate(lbl = recode_factor(group3456, `2` = "1989", `1` = "1998", `0` = "2007")) |>
+  ggplot(aes(x = year, y = ROA6, color = lbl)) + 
+  geom_line() +
+  geom_vline(xintercept = c(treat_year3456_2, treat_year3456_1, treat_year3456_0), 
+             linetype = "dashed") +
+  labs(color = NULL) +
+  theme_minimal() +
+  theme(legend.position = c(0.1, 0.8))
+
+fig2_4b <- df_sim |>
+  ggplot(aes(x = att_4)) +
+  geom_density(fill = "blue", alpha = 0.3) +
+  geom_vline(xintercept = 3.04, linetype = "dashed") +
+  theme_minimal() 
+
+fig2_5b <- df_sim |>
+  ggplot(aes(x = att_5)) +
+  geom_density(fill = "blue", alpha = 0.3) +
+  geom_vline(xintercept = c(0, 2.85), linetype = "dashed") +
+  theme_minimal() 
+
+fig2_6b <- df_sim |>
+  ggplot(aes(x = att_6)) +
+  geom_density(fill = "blue", alpha = 0.3) +
+  geom_vline(xintercept = c(0, 3.4), linetype = "dashed") +
+  theme_minimal() 
+
+fig2 <- (fig2_4a + fig2_5a + fig2_6a)/(fig2_4b + fig2_5b + fig2_6b)
 ```
 
