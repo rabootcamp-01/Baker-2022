@@ -1,13 +1,84 @@
-```{r setup}
+```{r setup, echo=FALSE}
 library(tidyverse)
 library(dplyr)
 library(fixest)
 library(patchwork)
+library(ggiplot)
 ```
 
-```{r}
+# シミュレーションの概要
+1000個の企業の36年間分のROA（Return on asset）を生成する。  
+ROAは企業固定効果、時間固定効果、処置効果、誤差項の4つで構成されている。よって、ROAの値は以下の通り。
+$$
+ROA_{it}=\alpha_{i}+\lambda_{t}+\tau_{it}D_{it}+\epsilon_{it}
+$$
+$$
+\alpha_{i},\lambda_{t},\epsilon_{it}\sim N(0, 0.2^{2})
+$$
+処置効果$\tau_{it}$と処置変数$D_{it}$について6つのシミュレーションを行う。
+
+### simulation 1
+処置を行う年($g$)は共通。$\tau_{it}$は時間で共通。
+$$
+g=18\\
+\tau_{i}\sim N(2, 0.2^{2})
+$$
+
+### simulation 2
+処置を行う年は共通。$\tau_{it}$は時間を通して変化。
+$$
+g=18\\
+\tau_{it}\sim N(2, 0.2^{2}\times(t-g))
+$$
+
+### simulation 3
+処置を行う年は企業によって異なる。$\tau_{it}$は企業、時間によって共通。
+$$
+g=\begin{cases}
+9&\text{for 333個の企業}\\
+18&\text{for 333個の企業}\\
+27&\text{for 334個の企業}
+\end{cases}\\
+\tau_{i}\sim N(2, 0.2^{2})
+$$
+
+### simulation 4
+処置を行う年は企業によって異なる。$\tau_{it}$は時間によって共通、企業によって異なる。
+$$
+g=\begin{cases}
+9&\text{for 333個の企業}\\
+18&\text{for 333個の企業}\\
+27&\text{for 334個の企業}
+\end{cases}\\
+\tau_{i}\sim N(1 or 3or5, 0.2^{2})
+$$
+
+### simulation 5
+処置を行う年は企業によって異なる。$\tau_{it}$は企業によって共通、時間によって異なる。
+$$
+g=\begin{cases}
+9&\text{for 333個の企業}\\
+18&\text{for 333個の企業}\\
+27&\text{for 334個の企業}
+\end{cases}\\
+\tau_{i}\sim N(0.3, 0.2^{2}\times (t-g))
+$$
+
+### simulation 6
+処置を行う年は企業によって異なる。$\tau_{it}$は時間、企業によって異なる。
+$$
+g=\begin{cases}
+9&\text{for 333個の企業}\\
+18&\text{for 333個の企業}\\
+27&\text{for 334個の企業}
+\end{cases}\\
+\tau_{i}\sim N(0.1or0.3or0.5, 0.2^{2}\times (t-g))
+$$
+
+```{r, echo=FALSE}
 N <- 1000
 Y <- 36
+num_sim <- 500
 
 treat_year12 <- 18
 treat_year3456_2 <- 9
@@ -25,11 +96,14 @@ delta6_0_true <- 0.1
 delta6_1_true <- 0.3
 delta6_2_true <- 0.5
 
+tau4_fig6_true <- 4 + 1/3
+tau5_fig6_true <- 64.8 / 27
+tau6_fig6_true <- 11 / 3
+```
 
+```{r, eval=FALSE, echo=FALSE}
 set.seed(10)
 
-
-num_sim <- 500
 att_1 <- c()
 att_2 <- c()
 att_3 <- c()
@@ -37,7 +111,19 @@ att_4 <- c()
 att_5 <- c()
 att_6 <- c()
 
+att_1_sunab <- c()
+att_2_sunab <- c()
+att_3_sunab <- c()
+att_4_sunab <- c()
+att_5_sunab <- c()
+att_6_sunab <- c()
+
+att_4_fig6 <- c()
+att_5_fig6 <- c()
+att_6_fig6 <- c()
+
 for (i in 1:num_sim){
+  print(i)
   firm_fixed <- rnorm(N, 0, 0.5)
   year_fixed <- rnorm(Y, 0, 0.5)
   epsilon <- rnorm(N * Y, 0, 0.5)
@@ -70,6 +156,14 @@ for (i in 1:num_sim){
         group3456 == 0 & year > treat_year3456_0 ~ 1,
         .default = 0
       ),
+      year_treated12 = if_else(group12 == 1, treat_year12 + 1, 9999),
+      year_treated3456 = case_when(
+        group3456 == 2 ~ treat_year3456_2 + 1,
+        group3456 == 1 ~ treat_year3456_1 + 1,
+        .default = treat_year3456_0 + 1
+      ),
+      
+      
       #makeATT
       tau13 = rep(rnorm(N, tau13_true, 0.2), Y),
       tau2 = rep(rnorm(N, delta2_true, 0.2), Y) * (year - treat_year12),
@@ -119,6 +213,37 @@ for (i in 1:num_sim){
   model5 <- feols(ROA5 ~ D3456 | firm + year, data = df)
   model6 <- feols(ROA6 ~ D3456 | firm + year, data = df)
   
+  #sunab
+  model1sunab <- feols(ROA1 ~ sunab(year_treated12, year) | firm + year, data = df)
+  model2sunab <- feols(ROA2 ~ sunab(year_treated12, year) | firm + year, data = df)
+  model3sunab <- df |> 
+    filter(year < max(year_treated3456)) |> 
+    feols(ROA3 ~ sunab(year_treated3456, year, ref.c = max(year_treated3456)) |
+                         firm + year, 
+                       data = _)
+  model4sunab <- df |> 
+    filter(year < max(year_treated3456)) |> 
+    feols(ROA4 ~ sunab(year_treated3456, year, ref.c = max(year_treated3456)) |
+                         firm + year, 
+                       data = _)
+  model5sunab <- df |> 
+    filter(year < max(year_treated3456)) |> 
+    feols(ROA5 ~ sunab(year_treated3456, year, ref.c = max(year_treated3456)) |
+                         firm + year, 
+                       data = _)
+  model6sunab <- df |> 
+    filter(year < max(year_treated3456)) |> 
+    feols(ROA6 ~ sunab(year_treated3456, year, ref.c = max(year_treated3456)) |
+                         firm + year, 
+                       data = _)
+  
+  #model456 new dataframe
+  model4_fig6 <- feols(ROA4 ~ D3456 | firm + year, data = df |> 
+                         filter(year < max(year_treated3456)))
+  model5_fig6 <- feols(ROA5 ~ D3456 | firm + year, data = df |> 
+                         filter(year < max(year_treated3456)))
+  model6_fig6 <- feols(ROA6 ~ D3456 | firm + year, data = df |> 
+                         filter(year < max(year_treated3456)))
   
   
   att_1 <- c(att_1, model1$coefficients[[1]])
@@ -127,16 +252,198 @@ for (i in 1:num_sim){
   att_4 <- c(att_4, model4$coefficients[[1]])
   att_5 <- c(att_5, model5$coefficients[[1]])
   att_6 <- c(att_6, model6$coefficients[[1]])
+  
+  att_1_sunab <- c(att_1_sunab, summary(model1sunab, agg = "ATT")[["coeftable"]][[1]])
+  att_2_sunab <- c(att_2_sunab, summary(model2sunab, agg = "ATT")[["coeftable"]][[1]])
+  att_3_sunab <- c(att_3_sunab, summary(model3sunab, agg = "ATT")[["coeftable"]][[1]])
+  att_4_sunab <- c(att_4_sunab, summary(model4sunab, agg = "ATT")[["coeftable"]][[1]])
+  att_5_sunab <- c(att_5_sunab, summary(model5sunab, agg = "ATT")[["coeftable"]][[1]])
+  att_6_sunab <- c(att_6_sunab, summary(model6sunab, agg = "ATT")[["coeftable"]][[1]])
+  
+  att_4_fig6 <- c(att_4_fig6, model4_fig6$coefficients[[1]])
+  att_5_fig6 <- c(att_5_fig6, model5_fig6$coefficients[[1]])
+  att_6_fig6 <- c(att_6_fig6, model6_fig6$coefficients[[1]])
+  
+  
 }
+
+write.csv(df_sim, "simulation_data.csv")
 ```
 
-```{r}
-df_sim <- tibble(att_1, att_2, att_3, att_4, att_5, att_6)
+```{r, echo=FALSE}
+set.seed(10)
+num_sim <- 1
+
+att_1 <- c()
+att_2 <- c()
+att_3 <- c()
+att_4 <- c()
+att_5 <- c()
+att_6 <- c()
+
+att_1_sunab <- c()
+att_2_sunab <- c()
+att_3_sunab <- c()
+att_4_sunab <- c()
+att_5_sunab <- c()
+att_6_sunab <- c()
+
+att_4_fig6 <- c()
+att_5_fig6 <- c()
+att_6_fig6 <- c()
+
+for (i in 1:num_sim){
+  print(i)
+  firm_fixed <- rnorm(N, 0, 0.5)
+  year_fixed <- rnorm(Y, 0, 0.5)
+  epsilon <- rnorm(N * Y, 0, 0.5)
+  
+  
+  
+  list_i <- rep(1:N, Y)
+  list_t <- rep(1:Y, each = N)
+  
+  
+  df <- tibble(
+    firm = list_i,
+    year = list_t,
+    firm_fixed = rep(firm_fixed, Y),
+    year_fixed = rep(year_fixed, each = N),
+    epsilon
+  ) |> 
+    mutate(
+      group12 = if_else(firm <= N %/% 2, 0, 1),
+      group3456 = case_when(
+        firm <= N %/% 3 ~ 0,
+        between(firm, N %/% 3 + 1, N %/% 3 * 2) ~ 1,
+        .default = 2
+      ),
+      
+      D12 = if_else(group12 == 1 & year > treat_year12, 1, 0),
+      D3456 = case_when(
+        group3456 == 2 & year > treat_year3456_2 ~ 1,
+        group3456 == 1 & year > treat_year3456_1 ~ 1,
+        group3456 == 0 & year > treat_year3456_0 ~ 1,
+        .default = 0
+      ),
+      year_treated12 = if_else(group12 == 1, treat_year12 + 1, 9999),
+      year_treated3456 = case_when(
+        group3456 == 2 ~ treat_year3456_2 + 1,
+        group3456 == 1 ~ treat_year3456_1 + 1,
+        .default = treat_year3456_0 + 1
+      ),
+      
+      
+      #makeATT
+      tau13 = rep(rnorm(N, tau13_true, 0.2), Y),
+      tau2 = rep(rnorm(N, delta2_true, 0.2), Y) * (year - treat_year12),
+      tau4_0 = rep(rnorm(N, tau4_0_true, 0.2), Y),
+      tau4_1 = rep(rnorm(N, tau4_1_true, 0.2), Y),
+      tau4_2 = rep(rnorm(N, tau4_2_true, 0.2), Y),
+      tau5_0 = (rnorm(N * Y, 0, 0.2) * sqrt(max(year - treat_year3456_0, 0)) + 
+                  delta5_true) * (year - treat_year3456_0),
+      tau5_1 = (rnorm(N * Y, 0, 0.2) * sqrt(max(year - treat_year3456_1, 0)) + 
+                  delta5_true) * (year - treat_year3456_1),
+      tau5_2 = (rnorm(N * Y, 0, 0.2) * sqrt(max(year - treat_year3456_2, 0)) + 
+                  delta5_true) * (year - treat_year3456_2),
+      tau6_0 = (rnorm(N * Y, 0, 0.2) * sqrt(max(year - treat_year3456_0, 0)) + 
+                  delta6_0_true) * (year - treat_year3456_0),
+      tau6_1 = (rnorm(N * Y, 0, 0.2) * sqrt(max(year - treat_year3456_1, 0)) + 
+                  delta6_1_true) * (year - treat_year3456_1),
+      tau6_2 = (rnorm(N * Y, 0, 0.2) * sqrt(max(year - treat_year3456_2, 0)) + 
+                  delta6_2_true) * (year - treat_year3456_2),
+                  
+      
+      #makeROA
+      ROA1 = firm_fixed + year_fixed + epsilon + tau13 * D12,
+      ROA2 = firm_fixed + year_fixed + epsilon + tau2 * D12,
+      ROA3 = firm_fixed + year_fixed + epsilon + tau13 * D3456,
+      ROA4 = case_when(
+        group3456 == 0 ~ firm_fixed + year_fixed + epsilon + tau4_0 * D3456,
+        group3456 == 1 ~ firm_fixed + year_fixed + epsilon + tau4_1 * D3456,
+        group3456 == 2 ~ firm_fixed + year_fixed + epsilon + tau4_2 * D3456
+      ),
+      ROA5 = case_when(
+        group3456 == 0 ~ firm_fixed + year_fixed + epsilon + tau5_0 * D3456,
+        group3456 == 1 ~ firm_fixed + year_fixed + epsilon + tau5_1 * D3456,
+        group3456 == 2 ~ firm_fixed + year_fixed + epsilon + tau5_2 * D3456
+      ),
+      ROA6 = case_when(
+        group3456 == 0 ~ firm_fixed + year_fixed + epsilon + tau6_0 * D3456,
+        group3456 == 1 ~ firm_fixed + year_fixed + epsilon + tau6_1 * D3456,
+        group3456 == 2 ~ firm_fixed + year_fixed + epsilon + tau6_2 * D3456
+      )
+    )
+  
+  #estimate_ATT
+  model1 <- feols(ROA1 ~ D12 | firm + year, data = df)
+  model2 <- feols(ROA2 ~ D12 | firm + year, data = df)
+  model3 <- feols(ROA3 ~ D3456 | firm + year, data = df)
+  model4 <- feols(ROA4 ~ D3456 | firm + year, data = df)
+  model5 <- feols(ROA5 ~ D3456 | firm + year, data = df)
+  model6 <- feols(ROA6 ~ D3456 | firm + year, data = df)
+  
+  #sunab
+  model1sunab <- feols(ROA1 ~ sunab(year_treated12, year) | firm + year, data = df)
+  model2sunab <- feols(ROA2 ~ sunab(year_treated12, year) | firm + year, data = df)
+  model3sunab <- df |> 
+    filter(year < max(year_treated3456)) |> 
+    feols(ROA3 ~ sunab(year_treated3456, year, ref.c = max(year_treated3456)) |
+                         firm + year, 
+                       data = _)
+  model4sunab <- df |> 
+    filter(year < max(year_treated3456)) |> 
+    feols(ROA4 ~ sunab(year_treated3456, year, ref.c = max(year_treated3456)) |
+                         firm + year, 
+                       data = _)
+  model5sunab <- df |> 
+    filter(year < max(year_treated3456)) |> 
+    feols(ROA5 ~ sunab(year_treated3456, year, ref.c = max(year_treated3456)) |
+                         firm + year, 
+                       data = _)
+  model6sunab <- df |> 
+    filter(year < max(year_treated3456)) |> 
+    feols(ROA6 ~ sunab(year_treated3456, year, ref.c = max(year_treated3456)) |
+                         firm + year, 
+                       data = _)
+  
+  #model456 new dataframe
+  model4_fig6 <- feols(ROA4 ~ D3456 | firm + year, data = df |> 
+                         filter(year < max(year_treated3456)))
+  model5_fig6 <- feols(ROA5 ~ D3456 | firm + year, data = df |> 
+                         filter(year < max(year_treated3456)))
+  model6_fig6 <- feols(ROA6 ~ D3456 | firm + year, data = df |> 
+                         filter(year < max(year_treated3456)))
+  
+  
+  att_1 <- c(att_1, model1$coefficients[[1]])
+  att_2 <- c(att_2, model2$coefficients[[1]])
+  att_3 <- c(att_3, model3$coefficients[[1]])
+  att_4 <- c(att_4, model4$coefficients[[1]])
+  att_5 <- c(att_5, model5$coefficients[[1]])
+  att_6 <- c(att_6, model6$coefficients[[1]])
+  
+  att_1_sunab <- c(att_1_sunab, summary(model1sunab, agg = "ATT")[["coeftable"]][[1]])
+  att_2_sunab <- c(att_2_sunab, summary(model2sunab, agg = "ATT")[["coeftable"]][[1]])
+  att_3_sunab <- c(att_3_sunab, summary(model3sunab, agg = "ATT")[["coeftable"]][[1]])
+  att_4_sunab <- c(att_4_sunab, summary(model4sunab, agg = "ATT")[["coeftable"]][[1]])
+  att_5_sunab <- c(att_5_sunab, summary(model5sunab, agg = "ATT")[["coeftable"]][[1]])
+  att_6_sunab <- c(att_6_sunab, summary(model6sunab, agg = "ATT")[["coeftable"]][[1]])
+  
+  att_4_fig6 <- c(att_4_fig6, model4_fig6$coefficients[[1]])
+  att_5_fig6 <- c(att_5_fig6, model5_fig6$coefficients[[1]])
+  att_6_fig6 <- c(att_6_fig6, model6_fig6$coefficients[[1]])
+  
+  
+}
+
+df_sim <- read.csv("simulation_data.csv")
+
 ```
 
-```{r}
+```{r, echo=FALSE}
 fig1_1a <- df |> 
-  summarise(across(ROA1, mean), .by = c(year, group12)) |> 
+  summarize(across(ROA1, mean), .by = c(year, group12)) |> 
   mutate(lbl = recode_factor(group12, `1` = "treatment", `0` = "control")) |> 
   ggplot(aes(x = year, y = ROA1, color = lbl)) + 
   geom_line() +
@@ -146,7 +453,7 @@ fig1_1a <- df |>
   theme(legend.position = c(0.1, 0.8))
 
 fig1_2a <- df |> 
-  summarise(across(ROA2, mean), .by = c(year, group12)) |> 
+  summarize(across(ROA2, mean), .by = c(year, group12)) |> 
   mutate(lbl = recode_factor(group12, `1` = "treatment", `0` = "control")) |> 
   ggplot(aes(x = year, y = ROA2, color = lbl))+ 
   geom_line() +
@@ -156,7 +463,7 @@ fig1_2a <- df |>
   theme(legend.position = c(0.1, 0.8))
 
 fig1_3a <- df |> 
-  summarise(across(ROA3, mean), .by = c(year, group3456)) |> 
+  summarize(across(ROA3, mean), .by = c(year, group3456)) |> 
   mutate(lbl = recode_factor(group3456, `2` = "1989", `1` = "1998", `0` = "2007")) |>
   ggplot(aes(x = year, y = ROA3, color = lbl)) + 
   geom_line() +
@@ -185,9 +492,10 @@ fig1_3b <- df_sim |>
   theme_minimal() 
 
 fig1 <- (fig1_1a + fig1_2a + fig1_3a)/(fig1_1b + fig1_2b + fig1_3b)
+fig1
 ```
 
-```{r}
+```{r, echo=FALSE}
 fig2_4a <- df |> 
   summarise(across(ROA4, mean), .by = c(year, group3456)) |> 
   mutate(lbl = recode_factor(group3456, `2` = "1989", `1` = "1998", `0` = "2007")) |>
@@ -236,9 +544,82 @@ fig2_5b <- df_sim |>
 fig2_6b <- df_sim |>
   ggplot(aes(x = att_6)) +
   geom_density(fill = "blue", alpha = 0.3) +
-  geom_vline(xintercept = c(0, 3.4), linetype = "dashed") +
+  geom_vline(xintercept = c(0, 344.8/108), linetype = "dashed") +
   theme_minimal() 
 
 fig2 <- (fig2_4a + fig2_5a + fig2_6a)/(fig2_4b + fig2_5b + fig2_6b)
+fig2
+```
+
+```{r, echo=FALSE}
+fig6_1 <- df_sim |> 
+  ggplot() + 
+  geom_density(aes(x = att_1), fill = "blue", alpha = 0.3) +
+  geom_density(aes(x = att_1_sunab), fill = "orange", alpha = 0.3) +
+  geom_vline(xintercept = tau13_true, linetype = "dashed") +
+  theme_minimal() 
+
+fig6_2 <- df_sim |> 
+  ggplot() + 
+  geom_density(aes(x = att_2), fill = "blue", alpha = 0.3) +
+  geom_density(aes(x = att_2_sunab), fill = "orange", alpha = 0.3) +
+  geom_vline(xintercept = tau2_true, linetype = "dashed") +
+  theme_minimal() 
+
+fig6_3 <- df_sim |> 
+  ggplot() + 
+  geom_density(aes(x = att_3), fill = "blue", alpha = 0.3) +
+  geom_density(aes(x = att_3_sunab), fill = "orange", alpha = 0.3) +
+  geom_vline(xintercept = tau13_true, linetype = "dashed") +
+  theme_minimal() 
+
+fig6_4 <- df_sim |> 
+  ggplot() + 
+  geom_density(aes(x = att_4_fig6), fill = "blue", alpha = 0.3) +
+  geom_density(aes(x = att_4_sunab), fill = "orange", alpha = 0.3) +
+  geom_vline(xintercept = tau4_fig6_true, linetype = "dashed") +
+  theme_minimal() 
+
+fig6_5 <- df_sim |> 
+  ggplot() + 
+  geom_density(aes(x = att_5_fig6), fill = "blue", alpha = 0.3) +
+  geom_density(aes(x = att_5_sunab), fill = "orange", alpha = 0.3) +
+  geom_vline(xintercept = tau5_fig6_true, linetype = "dashed") +
+  theme_minimal() 
+
+fig6_6 <- df_sim |> 
+  ggplot() + 
+  geom_density(aes(x = att_6_fig6), fill = "blue", alpha = 0.3) +
+  geom_density(aes(x = att_6_sunab), fill = "orange", alpha = 0.3) +
+  geom_vline(xintercept = tau6_fig6_true, linetype = "dashed") +
+  theme_minimal() 
+
+fig6 <- (fig6_1 + fig6_2 + fig6_3)/(fig6_4 + fig6_5 + fig6_6)
+fig6
+```
+
+```{r, echo=FALSE}
+
+model6_twfe <- df |> 
+  filter(year < max(year_treated3456)) |> 
+  mutate(time_to_treatment = year - year_treated3456) |>
+  feols(
+    ROA6 ~ i(time_to_treatment, ref = -1) |
+      firm + year, 
+    data = _
+  )
+
+
+fig7 <- ggiplot(model6_twfe) +
+  xlim(c(-5.5, 5.5)) +
+  ylim(c(-5, 5.5)) +
+  geom_abline(slope = 1.3/3, intercept = 1.3/3, color = "orange")
+
+fig8 <- ggiplot(model6sunab) +
+  xlim(c(-5.5, 5.5)) +
+  ylim(c(-0.5, 4)) +
+  geom_abline(slope = 1.3/3, intercept = 1.3/3, color = "orange")
+fig7
+fig8
 ```
 
